@@ -19,9 +19,9 @@ const identificaEscopoTool = tool(
   },
   {
     name: "identifica_escopo",
-    description: "Detecta se o escopo é sobre cliente ou pedido, qual quer coisa diferente disso não é suportado.",
+    description: `Detecta se o escopo é sobre cliente ou pedido, qual quer coisa diferente retorno o escopo como "undefined".`,
     schema: z.object({
-      escopo: z.enum(["pedido", "cliente"]),
+      escopo: z.enum(["pedido", "cliente", "undefined"]).default("undefined"),
     }),
   }
 );
@@ -96,30 +96,41 @@ const buscarClienteTool = tool(
       console.log("\nAGENTE FINAL -->", message);
       return { messages: [new AIMessage(`${lastMessage.content.toString()} `)] };
     })
+    .addNode("undefined", async (state) => {
+      const lastMessage = state.messages[state.messages.length - 1];
+      const message = lastMessage?.content?.toString().toLowerCase();
+      console.log("\nROTEADOR -->", message);
+      console.log("\n undefined -->", message);
+      return { messages: [new AIMessage(`não posso te da um retorno sobre esse assunto`)] };
+    })
 
     .addEdge("__start__", "llm")
     .addEdge("llm", "toolsEscopo")
-    .addConditionalEdges("toolsEscopo", (state) => {
-      const lastMessage = state.messages[state.messages.length - 1];
-      const message = lastMessage?.content?.toString().toLowerCase();
-      let next = "roteador";
-      if (!listaEscopo.find((escopo) => message.toLocaleLowerCase() === escopo.toLocaleLowerCase())) {
-        next = "agentFinal";
-      }
-      console.log("\nTOOLSESCOPO -->", next);
-      return next;
-    })
-
+    .addEdge("toolsEscopo", "roteador")
+    .addEdge("toolsEscopo", "undefined")
+    // .addConditionalEdges("toolsEscopo", (state) => {
+    //   const lastMessage = state.messages[state.messages.length - 1];
+    //   const message = lastMessage?.content?.toString().toLowerCase();
+    //   let next = "roteador";
+    //   if (!listaEscopo.find((escopo) => message.toLocaleLowerCase() === escopo.toLocaleLowerCase())) {
+    //     next = "agentFinal";
+    //   }
+    //   console.log("\nTOOLSESCOPO -->", next);
+    //   return next;
+    // })
+    .addEdge("roteador", "toolsPedido")
+    .addEdge("roteador", "toolsCliente")
     .addEdge("toolsPedido", "agentFinal")
     .addEdge("toolsCliente", "agentFinal")
+    .addEdge("undefined", "__end__")
 
-    .addConditionalEdges("roteador", (state) => {
-      const lastMessage = state.messages[state.messages.length - 1];
-      const message = lastMessage?.content?.toString().toLowerCase();
-      if (message.includes("pedido")) return "toolsPedido";
-      if (message.includes("cliente")) return "toolsCliente";
-      throw new Error("Mensagem não reconhecida pelo roteador");
-    })
+    // .addConditionalEdges("roteador", (state) => {
+    //   const lastMessage = state.messages[state.messages.length - 1];
+    //   const message = lastMessage?.content?.toString().toLowerCase();
+    //   if (message.includes("pedido")) return "toolsPedido";
+    //   if (message.includes("cliente")) return "toolsCliente";
+    //   throw new Error("Mensagem não reconhecida pelo roteador");
+    // })
 
     .addEdge("agentFinal", "__end__")
     .compile();
