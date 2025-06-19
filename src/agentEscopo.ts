@@ -5,7 +5,7 @@ import { ToolNode } from "@langchain/langgraph/prebuilt";
 import { ChatOpenAI } from "@langchain/openai";
 import { z } from "zod";
 import { tool } from "@langchain/core/tools";
-import { AIMessage, HumanMessage } from "@langchain/core/messages";
+import { AIMessage, HumanMessage, ToolMessage } from "@langchain/core/messages";
 import { de } from "zod/dist/types/v4/locales";
 import { ECDH } from "node:crypto";
 
@@ -21,13 +21,14 @@ const identificaEscopoTool = tool(
     name: "identifica_escopo",
     description: `Detecta se o escopo é sobre cliente ou pedido, qual quer coisa diferente retorno o escopo como "undefined".`,
     schema: z.object({
-      escopo: z.enum(["pedido", "cliente", "undefined"]).default("undefined"),
+      escopo: z.enum(["pedido", "cliente"]),
     }),
   }
 );
 
 const buscarPedidoTool = tool(
   async ({ numero }: { numero: string }) => {
+    console.log("Buscando pedido:", numero);
     if (!numero) return "Informe o número do pedido.";
     return `Pedido ${numero} encontrado!`;
   },
@@ -55,7 +56,7 @@ const buscarClienteTool = tool(
   // 2. Modelos (Agents)
   //---------------------------------------------
 
-  const llmEscopo = new ChatOpenAI({ modelName: "gpt-4o-mini", apiKey: process.env.OPENAI_API_KEY, maxTokens: 1000, temperature: 0.9 }).bindTools([identificaEscopoTool]);
+  const llmEscopo = new ChatOpenAI({ modelName: "gpt-4o-mini", apiKey: process.env.OPENAI_API_KEY, maxTokens: 1000, temperature: 0.9, verbose: false }).bindTools([identificaEscopoTool]);
 
   const agentFinal = new ChatOpenAI({ modelName: "gpt-4o-mini", apiKey: process.env.OPENAI_API_KEY, maxTokens: 1000, temperature: 0.9 }).bindTools([]);
 
@@ -71,6 +72,7 @@ const buscarClienteTool = tool(
   //---------------------------------------------
 
   // Define the function that calls the model
+
   async function callModel(state: typeof MessagesAnnotation.State) {
     const response = await llmEscopo.invoke(state.messages);
 
@@ -83,55 +85,78 @@ const buscarClienteTool = tool(
     .addNode("toolsEscopo", escopoTools)
     .addNode("toolsPedido", toolNodePedido)
     .addNode("toolsCliente", toolNodeCliente)
-    .addNode("roteador", async (state: any) => {
+    .addNode("roteador", async (state) => {
       const lastMessage = state.messages[state.messages.length - 1];
       const message = lastMessage?.content?.toString().toLowerCase();
-      console.log("\nROTEADOR -->", message);
-      if (message.includes("pedido")) return { messages: [new AIMessage(`toolsPedido`)] };
-      if (message.includes("cliente")) return { messages: [new AIMessage(`toolsCliente`)] };
+      console.log("\nROTEADOR (NODE) -->", message);
+      if (message.includes("pedido")) {
+        // Retorna ToolMessage para acionar o ToolNode
+        // Extraia o número do pedido do texto da mensagem (exemplo simples)
+        const numeroPedido = message.match(/\d+/)?.[0] || "12345";
+        return {
+          messages: [
+            new ToolMessage({
+              name: "buscar_pedido",
+              additional_kwargs: { numero: numeroPedido },
+              content: "",
+              tool_call_id: "buscar_pedido_" + numeroPedido,
+            }),
+          ],
+        };
+      }
+      if (message.includes("cliente")) {
+        // Extraia o CPF do texto da mensagem (exemplo simples)
+        const cpfCliente = message.match(/\d{11}/)?.[0] || "00000000000";
+        return {
+          messages: [
+            new ToolMessage({
+              name: "buscar_cliente",
+              additional_kwargs: { cpf: cpfCliente },
+              content: "",
+              tool_call_id: "buscar_cliente_" + cpfCliente,
+            }),
+          ],
+        };
+      }
     })
     .addNode("agentFinal", async (state) => {
       const lastMessage = state.messages[state.messages.length - 1];
       const message = lastMessage?.content?.toString().toLowerCase();
-      console.log("\nAGENTE FINAL -->", message);
+      console.log("\nAGENTE FINAL (NOODE) -->", message);
       return { messages: [new AIMessage(`${lastMessage.content.toString()} `)] };
     })
-    .addNode("undefined", async (state) => {
-      const lastMessage = state.messages[state.messages.length - 1];
-      const message = lastMessage?.content?.toString().toLowerCase();
-      console.log("\nROTEADOR -->", message);
-      console.log("\n undefined -->", message);
-      return { messages: [new AIMessage(`não posso te da um retorno sobre esse assunto`)] };
-    })
-
     .addEdge("__start__", "llm")
     .addEdge("llm", "toolsEscopo")
-    .addEdge("toolsEscopo", "roteador")
-    .addEdge("toolsEscopo", "undefined")
-    // .addConditionalEdges("toolsEscopo", (state) => {
-    //   const lastMessage = state.messages[state.messages.length - 1];
-    //   const message = lastMessage?.content?.toString().toLowerCase();
-    //   let next = "roteador";
-    //   if (!listaEscopo.find((escopo) => message.toLocaleLowerCase() === escopo.toLocaleLowerCase())) {
-    //     next = "agentFinal";
-    //   }
-    //   console.log("\nTOOLSESCOPO -->", next);
-    //   return next;
-    // })
-    .addEdge("roteador", "toolsPedido")
-    .addEdge("roteador", "toolsCliente")
+    .addConditionalEdges(
+      "toolsEscopo",
+      (state) => {
+        const lastMessage = state.messages[state.messages.length - 1];
+        const message = lastMessage?.content?.toString().toLowerCase();
+        let next = "roteador";
+        if (!listaEscopo.find((escopo) => message.toLocaleLowerCase() === escopo.toLocaleLowerCase())) {
+          next = "agentFinal";
+        }
+        console.log("\nTOOLSESCOPO (CONDITIONAL) -->", next);
+        return next;
+      },
+      ["roteador", "agentFinal"]
+    )
+
+    .addConditionalEdges(
+      "roteador",
+      (state) => {
+        const lastMessage = state.messages[state.messages.length - 1];
+        console.log("\nROTEADOR (CONDITIONAL) -->", lastMessage);
+        const message = lastMessage?.content?.toString().toLowerCase();
+        console.log("\nROTEADOR (CONDITIONAL) -->", message);
+        if (message.includes("pedido")) return "toolsPedido";
+        if (message.includes("cliente")) return "toolsCliente";
+        throw new Error("Mensagem não reconhecida pelo roteador");
+      },
+      ["toolsPedido", "toolsCliente"]
+    )
     .addEdge("toolsPedido", "agentFinal")
     .addEdge("toolsCliente", "agentFinal")
-    .addEdge("undefined", "__end__")
-
-    // .addConditionalEdges("roteador", (state) => {
-    //   const lastMessage = state.messages[state.messages.length - 1];
-    //   const message = lastMessage?.content?.toString().toLowerCase();
-    //   if (message.includes("pedido")) return "toolsPedido";
-    //   if (message.includes("cliente")) return "toolsCliente";
-    //   throw new Error("Mensagem não reconhecida pelo roteador");
-    // })
-
     .addEdge("agentFinal", "__end__")
     .compile();
 
