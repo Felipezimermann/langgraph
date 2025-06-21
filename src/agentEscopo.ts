@@ -3,11 +3,12 @@ import { writeFileSync } from "node:fs";
 import { StateGraph, MessagesAnnotation } from "@langchain/langgraph";
 import { z } from "zod";
 import { tool } from "@langchain/core/tools";
-import { HumanMessage } from "@langchain/core/messages";
+import { HumanMessage, SystemMessage, AIMessage } from "@langchain/core/messages";
 
 import ToolEscopo from "./tools/ToolEscopo";
 import ToolPedido from "./tools/ToolPedido";
 import AgentOpenAI from "./agents/AgentOpenAI";
+import askQuestion from "./terminal";
 
 //---------------------------------------------
 // 1. Definição das Tools
@@ -43,33 +44,47 @@ const buscarClienteTool = tool(
    */
   const agentEscopo = agentOpenAI.create([toolsEscopo.getEscopo]);
   const agentPedido = agentOpenAI.create([toolsPedido.getPedido]);
-
+  const agentFinal = agentOpenAI.create([]);
   //---------------------------------------------
   // 2. Definição do Workflow
   //---------------------------------------------
 
+  const listAgents = ["agent_pedido"];
   const workflow = new StateGraph(MessagesAnnotation)
     .addNode("toolsEscopo", toolsEscopo.node)
     .addNode("toolsPedido", toolsPedido.node)
-    .addNode("llm", (state) => agentOpenAI.call(state, agentEscopo))
-    .addNode("agentPedido", (state) => agentOpenAI.call(state, agentPedido))
-    .addEdge("__start__", "llm")
-    .addEdge("llm", "toolsEscopo")
+    .addNode("agent_escopo", (state) => agentOpenAI.call(state, agentEscopo))
+    .addNode("agent_pedido", (state) => agentOpenAI.call(state, agentPedido))
+    .addNode("agent_final", (state) => {
+      const lastMessage = state.messages[state.messages.length - 1];
+      const message = lastMessage.content.toString().toLowerCase().trim();
+      console.log("Messange antes do agent final: ", message);
+      const input = new SystemMessage(
+        `Voce é um assistente de IA que revisa todas as perguntas e respostas, e se verificar que ouve algum erro
+         , você deve informar que não pode responder a pergunta e que o usuário deve entrar em 
+         contato com o suporte. se tudo estiver ok, voce apenas repete a resposta do agente anterior sem alterar nada.`
+      );
+      state.messages.push(input);
+      return agentOpenAI.call(state, agentFinal);
+    })
+    .addEdge("__start__", "agent_escopo")
+    .addEdge("agent_escopo", "toolsEscopo")
     .addConditionalEdges(
       "toolsEscopo",
       (state) => {
         const lastMessage = state.messages[state.messages.length - 1];
         const escopo = lastMessage.content.toString().toLowerCase().trim();
-
-        if (escopo === "pedido") {
-          return "agentPedido";
+        if (!listAgents.find((value) => value.toLocaleLowerCase() === escopo.toLocaleLowerCase())) {
+          return "agent_final";
         }
-        return "__end__";
+        return escopo;
       },
-      ["agentPedido", "__end__"]
+      ["agent_pedido", "agent_final"]
     )
-    .addEdge("agentPedido", "toolsPedido")
-    .addEdge("toolsPedido", "__end__")
+
+    .addEdge("agent_pedido", "toolsPedido")
+    .addEdge("toolsPedido", "agent_final")
+    .addEdge("agent_final", "__end__")
 
     .compile();
 
@@ -106,7 +121,8 @@ const buscarClienteTool = tool(
   // askQuestion();
 
   const input = {
-    messages: [new HumanMessage("Quero consultar um pedido")],
+    messages: [new HumanMessage("Quero consultar um pedido numero 123456")],
+    //messages: [new HumanMessage("Quero saber aonde eu encontro um posto de gasulina")],
     //messages: [new HumanMessage("quero consultar um cliente")],
     //messages: [new HumanMessage("quero ver quantos trabalhadores a clamed tem")],
   };
@@ -118,6 +134,7 @@ const buscarClienteTool = tool(
   const filePath = "./graphState.png";
   writeFileSync(filePath, new Uint8Array(graphStateArrayBuffer));
 
-  const responde = await workflow.invoke(input);
-  console.log("Resposta final:", responde.messages[responde.messages.length - 1].content);
+  askQuestion(workflow);
+  //const responde = await workflow.invoke(input);
+  //console.log("Resposta final:", responde.messages[responde.messages.length - 1].content);
 })();
