@@ -56,9 +56,6 @@ const buscarClienteTool = tool(
     .addNode("agent_escopo", (state) => agentOpenAI.call(state, agentEscopo))
     .addNode("agent_pedido", (state) => agentOpenAI.call(state, agentPedido))
     .addNode("agent_final", (state) => {
-      const lastMessage = state.messages[state.messages.length - 1];
-      const message = lastMessage.content.toString().toLowerCase().trim();
-      console.log("Messange antes do agent final: ", message);
       const input = new SystemMessage(
         `Voce é um assistente de IA que revisa todas as perguntas e respostas, e se verificar que ouve algum erro
          , você deve informar que não pode responder a pergunta e que o usuário deve entrar em 

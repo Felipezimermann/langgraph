@@ -22,10 +22,9 @@ export default function askQuestion(workflow: any) {
       // Invoca o workflow com o histórico de mensagens
       const state = await workflow.invoke({ messages });
 
-      console.log(messages);
-
       // Atualiza o histórico com todas as mensagens retornadas (mantém contexto)
       messages = state.messages;
+      console.log("🤖:", state.messages[state.messages.length - 1].content);
 
       prompt();
     });
